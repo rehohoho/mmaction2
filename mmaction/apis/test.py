@@ -42,6 +42,7 @@ if not from_mmcv:
         dataset = data_loader.dataset
         prog_bar = mmcv.ProgressBar(len(dataset))
         for data in data_loader:
+            # import ipdb; ipdb.set_trace()
             with torch.no_grad():
                 result = model(return_loss=False, **data)
             results.extend(result)

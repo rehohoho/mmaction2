@@ -5,6 +5,7 @@ import os
 import os.path as osp
 import shutil
 import warnings
+import ipdb
 
 import mmcv
 import numpy as np
@@ -14,6 +15,10 @@ from torch.nn.modules.utils import _pair
 
 from ...utils import get_random_string, get_shm_dir, get_thread_id
 from ..builder import PIPELINES
+
+import h5py
+from io import BytesIO
+from PIL import Image
 
 
 @PIPELINES.register_module()
@@ -1337,6 +1342,76 @@ class RawFrameDecode:
                     f'decoding_backend={self.decoding_backend})')
         return repr_str
 
+@PIPELINES.register_module()
+class RawHDF5Decode:
+    """Load and decode hdf5 with given indices.
+
+    Required keys are "frame_dir", "filename_tmpl" and "frame_inds",
+    added or modified keys are "imgs", "img_shape" and "original_shape".
+
+    Args:
+        io_backend (str): IO backend where frames are stored. Default: 'disk'.
+        decoding_backend (str): Backend used for image decoding.
+            Default: 'BytesIO'.
+        kwargs (dict, optional): Arguments for FileClient.
+    """
+
+    def __init__(self, io_backend='disk', decoding_backend='BytesIO', **kwargs):
+        self.io_backend = io_backend
+        self.decoding_backend = decoding_backend
+        self.kwargs = kwargs
+        self.file_client = None
+
+    def __call__(self, results):
+        """Perform the ``RawHDF5Decode`` to pick frames given indices.
+
+        Args:
+            results (dict): The resulting dict to be modified and passed
+                to the next transform in pipeline.
+        """
+        # mmcv.use_backend(self.decoding_backend)
+
+        # import ipdb; ipdb.set_trace()
+        file = results['frame_dir']
+        filename_tmpl = results['filename_tmpl']
+        modality = results['modality']
+
+        if self.file_client is None:
+            self.file_client = FileClient(self.io_backend, **self.kwargs)
+
+        imgs = list()
+
+        if results['frame_inds'].ndim != 1:
+            results['frame_inds'] = np.squeeze(results['frame_inds'])
+
+        offset = results.get('offset', 0)
+
+        videos = h5py.File(file, 'r')['video']
+        for frame_idx in results['frame_inds']:
+            frame_idx += offset
+            if modality == 'RGB':
+                # filepath = osp.join(file, filename_tmpl.format(frame_idx))
+                # img_bytes = self.file_client.get(filepath)
+                # Get frame with channel order RGB directly.
+                # cur_frame = mmcv.imfrombytes(img_bytes, channel_order='rgb')
+                im = Image.open(BytesIO(videos[frame_idx])).convert('RGB')
+                im_array = np.array(im)
+                # import ipdb; ipdb.set_trace()
+                imgs.append(im_array)
+            else:
+                raise NotImplementedError
+
+        results['imgs'] = imgs
+        results['original_shape'] = imgs[0].shape[:2]
+        results['img_shape'] = imgs[0].shape[:2]
+
+        return results
+
+    def __repr__(self):
+        repr_str = (f'{self.__class__.__name__}('
+                    f'io_backend={self.io_backend}, '
+                    f'decoding_backend={self.decoding_backend})')
+        return repr_str
 
 @PIPELINES.register_module()
 class ImageDecode:

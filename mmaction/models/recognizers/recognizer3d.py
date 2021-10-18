@@ -22,6 +22,7 @@ class Recognizer3D(BaseRecognizer):
             x, loss_aux = self.neck(x, labels.squeeze())
             losses.update(loss_aux)
 
+        # import ipdb; ipdb.set_trace()
         cls_score = self.cls_head(x)
         gt_labels = labels.squeeze()
         loss_cls = self.cls_head.loss(cls_score, gt_labels, **kwargs)
@@ -60,7 +61,7 @@ class Recognizer3D(BaseRecognizer):
             else:
                 feat = torch.cat(feats)
         else:
-            feat = self.extract_feat(imgs)
+            feat, feats_dict = self.extract_feat(imgs)
             if self.with_neck:
                 feat, _ = self.neck(feat)
 
@@ -91,12 +92,17 @@ class Recognizer3D(BaseRecognizer):
         assert self.with_cls_head
         cls_score = self.cls_head(feat)
         cls_score = self.average_clip(cls_score, num_segs)
-        return cls_score
+        if feats_dict is not None:
+            return cls_score, feats_dict
+        else:
+            return cls_score
 
     def forward_test(self, imgs):
         """Defines the computation performed at every call when evaluation and
         testing."""
-        return self._do_test(imgs).cpu().numpy()
+        feats, feats_dict = self._do_test(imgs)
+        feats = feats.cpu().numpy()
+        return feats, feats_dict
 
     def forward_dummy(self, imgs, softmax=False):
         """Used for computing network FLOPs.

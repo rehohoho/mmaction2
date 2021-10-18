@@ -81,6 +81,7 @@ class Recognizer2D(BaseRecognizer):
             x = x.reshape((batches, num_segs, -1))
             # temporal average pooling
             x = x.mean(axis=1)
+            import ipdb; ipdb.set_trace()
             return x
 
         # When using `TSNHead` or `TPNHead`, shape is [batch_size, num_classes]

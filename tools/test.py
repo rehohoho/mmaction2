@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
+import enum
 import os
 import os.path as osp
 import warnings
@@ -19,7 +20,7 @@ from mmaction.utils import register_module_hooks
 
 # TODO import test functions from mmcv and delete them from mmaction2
 try:
-    from mmcv.engine import multi_gpu_test, single_gpu_test
+    from mmcv.engine import multi_gpu_test, single_gpu_test, single_gpu_test_with_filenames
 except (ImportError, ModuleNotFoundError):
     warnings.warn(
         'DeprecationWarning: single_gpu_test, multi_gpu_test, '
@@ -158,7 +159,12 @@ def inference_pytorch(args, cfg, distributed, data_loader):
 
     if not distributed:
         model = MMDataParallel(model, device_ids=[0])
-        outputs = single_gpu_test(model, data_loader)
+        # import ipdb; ipdb.set_trace()
+        # model = model.to(torch.device('cuda:0'))
+        # for cnt, data in enumerate(data_loader):
+            # import ipdb; ipdb.set_trace()
+        outputs, _ = single_gpu_test_with_filenames(model, data_loader)
+        import ipdb; ipdb.set_trace()
     else:
         model = MMDistributedDataParallel(
             model.cuda(),
@@ -315,9 +321,11 @@ def main():
                     'file should be json, pickle or yaml')
 
     # set cudnn benchmark
-    if cfg.get('cudnn_benchmark', False):
-        torch.backends.cudnn.benchmark = True
+    # if cfg.get('cudnn_benchmark', False):
+        # torch.backends.cudnn.benchmark = True
     cfg.data.test.test_mode = True
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = True
 
     # init distributed env first, since logger depends on the dist info.
     if args.launcher == 'none':
@@ -331,6 +339,11 @@ def main():
 
     # build the dataloader
     dataset = build_dataset(cfg.data.test, dict(test_mode=True))
+
+    # import ipdb; ipdb.set_trace()
+    # for cnt, da in enumerate(dataset):
+    #     import ipdb; ipdb.set_trace()
+
     dataloader_setting = dict(
         videos_per_gpu=cfg.data.get('videos_per_gpu', 1),
         workers_per_gpu=cfg.data.get('workers_per_gpu', 1),
