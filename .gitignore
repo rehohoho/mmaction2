@@ -143,3 +143,5 @@ mmaction/.mim/*
 
 # add by sayano.lee
 nohup*
+slurm*
+pretrained

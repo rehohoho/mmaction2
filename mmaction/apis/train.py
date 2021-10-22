@@ -166,7 +166,7 @@ def train_model(model,
     if cfg.omnisource:
         runner_kwargs = dict(train_ratio=train_ratio)
     runner.run(data_loaders, cfg.workflow, cfg.total_epochs, **runner_kwargs)
-    import ipdb; ipdb.set_trace()
+    # import ipdb; ipdb.set_trace()
 
     if test['test_last'] or test['test_best']:
         best_ckpt_path = None
