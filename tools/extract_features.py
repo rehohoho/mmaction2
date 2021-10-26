@@ -6,6 +6,7 @@ import warnings
 
 import mmcv
 import torch
+import numpy as np
 from mmcv import Config, DictAction
 from mmcv.cnn import fuse_conv_bn
 from mmcv.fileio.io import file_handlers
@@ -70,14 +71,6 @@ def parse_args():
         default='none',
         help='job launcher')
     parser.add_argument('--local_rank', type=int, default=0)
-    parser.add_argument(
-        '--onnx',
-        action='store_true',
-        help='Whether to test with onnx model or not')
-    parser.add_argument(
-        '--tensorrt',
-        action='store_true',
-        help='Whether to test with TensorRT engine or not')
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
@@ -97,7 +90,7 @@ def turn_off_pretrained(cfg):
             turn_off_pretrained(sub_cfg)
 
 
-def inference_pytorch(args, cfg, distributed, data_loader):
+def inference_pytorch(args, cfg, distributed, data_loader, output_config):
     """Get predictions by pytorch models."""
     if args.average_clips is not None:
         # You can set average_clips during testing, it will override the
@@ -134,145 +127,36 @@ def inference_pytorch(args, cfg, distributed, data_loader):
     else:
         model.cuda()
         model.eval()
-        results = []
         dataset = data_loader.dataset
         rank, world_size = get_dist_info()
         
         if rank == 0:
             prog_bar = mmcv.ProgressBar(len(dataset))
         
-        for data in data_loader:
+        for data, vid_info in zip(data_loader, data_loader.dataset.video_infos):
             with torch.no_grad():
                 imgs = data['imgs'].cuda()
                 batches = imgs.shape[0]
                 num_segs = imgs.shape[1]
                 imgs = imgs.reshape((-1, ) + imgs.shape[2:])
                 feat = model.extract_feat(imgs)
-                # import ipdb;ipdb.set_trace()
                 # feat, _ = model.neck(feat)
                 feat = feat[0]
                 feat = feat.cpu().numpy()
-            results.extend(feat)
+            
+            vid_name = os.path.basename(vid_info['frame_dir'])
+            save_path = os.path.join(output_config['out'], vid_name) + '.npy'
+            np.save(save_path, feat)
 
             if rank == 0:
                 # use the first key as main key to calculate the batch size
                 batch_size = len(next(iter(data.values())))
                 for _ in range(batch_size * world_size):
                     prog_bar.update()
-        
-        if args.gpu_collect:
-            results = collect_results_gpu(results, len(dataset))
-        else:
-            results = collect_results_cpu(results, len(dataset), args.tmpdir)
 
-    return results
-
-
-def inference_tensorrt(ckpt_path, distributed, data_loader, batch_size):
-    """Get predictions by TensorRT engine.
-
-    For now, multi-gpu mode and dynamic tensor shape are not supported.
-    """
-    assert not distributed, \
-        'TensorRT engine inference only supports single gpu mode.'
-    import tensorrt as trt
-    from mmcv.tensorrt.tensorrt_utils import (torch_dtype_from_trt,
-                                              torch_device_from_trt)
-
-    # load engine
-    with trt.Logger() as logger, trt.Runtime(logger) as runtime:
-        with open(ckpt_path, mode='rb') as f:
-            engine_bytes = f.read()
-        engine = runtime.deserialize_cuda_engine(engine_bytes)
-
-    # For now, only support fixed input tensor
-    cur_batch_size = engine.get_binding_shape(0)[0]
-    assert batch_size == cur_batch_size, \
-        ('Dataset and TensorRT model should share the same batch size, '
-         f'but get {batch_size} and {cur_batch_size}')
-
-    context = engine.create_execution_context()
-
-    # get output tensor
-    dtype = torch_dtype_from_trt(engine.get_binding_dtype(1))
-    shape = tuple(context.get_binding_shape(1))
-    device = torch_device_from_trt(engine.get_location(1))
-    output = torch.empty(
-        size=shape, dtype=dtype, device=device, requires_grad=False)
-
-    # get predictions
-    results = []
-    dataset = data_loader.dataset
-    prog_bar = mmcv.ProgressBar(len(dataset))
-    for data in data_loader:
-        bindings = [
-            data['imgs'].contiguous().data_ptr(),
-            output.contiguous().data_ptr()
-        ]
-        context.execute_async_v2(bindings,
-                                 torch.cuda.current_stream().cuda_stream)
-        results.extend(output.cpu().numpy())
-        batch_size = len(next(iter(data.values())))
-        for _ in range(batch_size):
-            prog_bar.update()
-    return results
-
-
-def inference_onnx(ckpt_path, distributed, data_loader, batch_size):
-    """Get predictions by ONNX.
-
-    For now, multi-gpu mode and dynamic tensor shape are not supported.
-    """
-    assert not distributed, 'ONNX inference only supports single gpu mode.'
-
-    import onnx
-    import onnxruntime as rt
-
-    # get input tensor name
-    onnx_model = onnx.load(ckpt_path)
-    input_all = [node.name for node in onnx_model.graph.input]
-    input_initializer = [node.name for node in onnx_model.graph.initializer]
-    net_feed_input = list(set(input_all) - set(input_initializer))
-    assert len(net_feed_input) == 1
-
-    # For now, only support fixed tensor shape
-    input_tensor = None
-    for tensor in onnx_model.graph.input:
-        if tensor.name == net_feed_input[0]:
-            input_tensor = tensor
-            break
-    cur_batch_size = input_tensor.type.tensor_type.shape.dim[0].dim_value
-    assert batch_size == cur_batch_size, \
-        ('Dataset and ONNX model should share the same batch size, '
-         f'but get {batch_size} and {cur_batch_size}')
-
-    # get predictions
-    sess = rt.InferenceSession(ckpt_path)
-    results = []
-    dataset = data_loader.dataset
-    prog_bar = mmcv.ProgressBar(len(dataset))
-    for data in data_loader:
-        imgs = data['imgs'].cpu().numpy()
-        onnx_result = sess.run(None, {net_feed_input[0]: imgs})[0]
-        results.extend(onnx_result)
-        batch_size = len(next(iter(data.values())))
-        for _ in range(batch_size):
-            prog_bar.update()
-    return results
-
-"""
-import pickle
-with open('work_dirs/tpn_slowonly_r50_8x8x1_150e_diving48_rgb/epoch_149_features.pkl', 'rb') as f:
-    a = pickle.load(f)
-a[0].shape
-"""
 
 def main():
     args = parse_args()
-
-    if args.tensorrt and args.onnx:
-        raise ValueError(
-            'Cannot set onnx mode and tensorrt mode at the same time.')
 
     cfg = Config.fromfile(args.config)
 
@@ -296,15 +180,8 @@ def main():
         else:
             out = output_config['out']
             # make sure the dirname of the output path exists
-            mmcv.mkdir_or_exist(osp.dirname(out))
+            mmcv.mkdir_or_exist(out)
             _, suffix = osp.splitext(out)
-            if dataset_type == 'AVADataset':
-                assert suffix[1:] == 'csv', ('For AVADataset, the format of '
-                                             'the output file should be csv')
-            else:
-                assert suffix[1:] in file_handlers, (
-                    'The format of the output '
-                    'file should be json, pickle or yaml')
 
     # set cudnn benchmark
     if cfg.get('cudnn_benchmark', False):
@@ -331,22 +208,8 @@ def main():
     dataloader_setting = dict(dataloader_setting,
                               **cfg.data.get('test_dataloader', {}))
     data_loader = build_dataloader(dataset, **dataloader_setting)
-
-    if args.tensorrt:
-        outputs = inference_tensorrt(args.checkpoint, distributed, data_loader,
-                                     dataloader_setting['videos_per_gpu'])
-    elif args.onnx:
-        outputs = inference_onnx(args.checkpoint, distributed, data_loader,
-                                 dataloader_setting['videos_per_gpu'])
-    else:
-        outputs = inference_pytorch(args, cfg, distributed, data_loader)
-
-    rank, _ = get_dist_info()
-    if rank == 0:
-        if output_config.get('out', None):
-            out = output_config['out']
-            print(f'\nwriting results to {out}')
-            dataset.dump_results(outputs, **output_config)
+  
+    inference_pytorch(args, cfg, distributed, data_loader, output_config)
 
 
 if __name__ == '__main__':
