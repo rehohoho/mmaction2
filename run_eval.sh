@@ -7,7 +7,7 @@ RESULT_FILE=work_dirs/tpn_slowonly_r50_8x8x1_150e_diving48_rgb/epoch_135.pkl
 EVAL_METRICS=top_k_accuracy
 NUM_GPU=2
 
-# ./tools/dist_test.sh ${CONFIG_FILE} ${CHECKPOINT_FILE} 1 \
+# ./tools/dist_test.sh ${CONFIG_FILE} ${CHECKPOINT_FILE} ${NUM_GPU} \
 #    --out ${RESULT_FILE} \
 #    --eval ${EVAL_METRICS} \
 # 2>&1 | tee ${RESULT_FILE}.log

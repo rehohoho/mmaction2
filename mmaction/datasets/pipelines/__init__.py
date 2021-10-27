@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .augmentations import (AudioAmplify, CenterCrop, ColorJitter, Flip, Fuse,
                             Imgaug, MelSpectrogram, MultiScaleCrop, Normalize,
-                            PytorchVideoTrans, RandomCrop, RandomRescale,
+                            PytorchVideoTrans, RandomCrop, RandomErasing, RandomRescale,
                             RandomResizedCrop, Resize, TenCrop, ThreeCrop,
                             TorchvisionTrans)
 from .compose import Compose
@@ -23,7 +23,7 @@ from .pose_loading import (GeneratePoseTarget, LoadKineticsPose,
 
 __all__ = [
     'SampleFrames', 'PyAVDecode', 'DecordDecode', 'DenseSampleFrames',
-    'OpenCVDecode', 'MultiScaleCrop', 'RandomResizedCrop', 'RandomCrop',
+    'OpenCVDecode', 'MultiScaleCrop', 'RandomResizedCrop', 'RandomCrop', 'RandomErasing',
     'Resize', 'Flip', 'Fuse', 'Normalize', 'ThreeCrop', 'CenterCrop',
     'TenCrop', 'ImageToTensor', 'Transpose', 'Collect', 'FormatShape',
     'Compose', 'ToTensor', 'ToDataContainer', 'GenerateLocalizationLabels',
