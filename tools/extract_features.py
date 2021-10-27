@@ -22,10 +22,10 @@ from mmaction.utils import register_module_hooks
 # try:
 #     from mmcv.engine import multi_gpu_test, single_gpu_test
 # except (ImportError, ModuleNotFoundError):
-warnings.warn(
-    'DeprecationWarning: single_gpu_test, multi_gpu_test, '
-    'collect_results_cpu, collect_results_gpu from mmaction2 will be '
-    'deprecated. Please install mmcv through master branch.')
+# warnings.warn(
+#     'DeprecationWarning: single_gpu_test, multi_gpu_test, '
+#     'collect_results_cpu, collect_results_gpu from mmaction2 will be '
+#     'deprecated. Please install mmcv through master branch.')
 from mmaction.apis.test import multi_gpu_test, single_gpu_test, \
   collect_results_cpu, collect_results_gpu
 
@@ -125,7 +125,11 @@ def inference_pytorch(args, cfg, distributed, data_loader, output_config):
         model = MMDataParallel(model, device_ids=[0])
         outputs = single_gpu_test(model, data_loader)
     else:
-        model.cuda()
+        model = MMDistributedDataParallel(
+            model.cuda(),
+            device_ids=[torch.cuda.current_device()],
+            broadcast_buffers=False)
+        
         model.eval()
         dataset = data_loader.dataset
         rank, world_size = get_dist_info()
@@ -133,20 +137,25 @@ def inference_pytorch(args, cfg, distributed, data_loader, output_config):
         if rank == 0:
             prog_bar = mmcv.ProgressBar(len(dataset))
         
-        for data, vid_info in zip(data_loader, data_loader.dataset.video_infos):
-            with torch.no_grad():
-                imgs = data['imgs'].cuda()
-                batches = imgs.shape[0]
-                num_segs = imgs.shape[1]
-                imgs = imgs.reshape((-1, ) + imgs.shape[2:])
-                feat = model.extract_feat(imgs)
-                # feat, _ = model.neck(feat)
-                feat = feat[0]
-                feat = feat.cpu().numpy()
+        vid_infos = data_loader.dataset.video_infos
+        for idx, data in enumerate(data_loader):
+            vid_name = os.path.basename(vid_infos[idx * world_size + rank]['frame_dir'])
+            save_path = os.path.join(output_config['out'], vid_name) + '.pt'
             
-            vid_name = os.path.basename(vid_info['frame_dir'])
-            save_path = os.path.join(output_config['out'], vid_name) + '.npy'
-            np.save(save_path, feat)
+            if not os.path.exists(save_path):
+                with torch.no_grad():
+                    imgs = data['imgs'].cuda()
+                    batches = imgs.shape[0]
+                    num_segs = imgs.shape[1]
+                    imgs = imgs.reshape((-1, ) + imgs.shape[2:])
+                    # import ipdb;ipdb.set_trace()
+                    feat = model.module.extract_feat(imgs)
+                    # feat, _ = model.module.neck(feat)
+                    if feat[0].shape[-1] < feat[1].shape[-1]:
+                        feat = feat[0]
+                    else:
+                        feat = feat[1]
+                torch.save(feat, save_path)
 
             if rank == 0:
                 # use the first key as main key to calculate the batch size
